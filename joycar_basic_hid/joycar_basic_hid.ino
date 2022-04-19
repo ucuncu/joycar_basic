@@ -40,11 +40,15 @@ CRGBArray<NUM_LEDS> leds;//[NUM_LEDS];
 #define ENC_A A3
 #define ENC_B A5
 
+
+#define SW_ENC_A A1
+#define SW_ENC_B A2
+
 #define SW_A 2
 #define SW_B 7
 #define SW_C 5
 #define SW_D 3
-//#define SW_PRS 13
+#define SW_PRS 13
 
 enum all_modes {
   off,
@@ -52,13 +56,35 @@ enum all_modes {
   solid_red,
   solid_blue,
   solid_purple,
-  moving_bars,
   fire,
   rainbow_loop,
   solid_green,
   solid_yellow,
   bars,
 };
+
+// BUTTON MAP
+
+#define usb_but_1 0
+#define usb_but_2 1
+#define usb_but_3 2
+#define usb_but_4 3
+#define usb_but_5 4
+#define usb_but_6 5
+#define usb_but_7 6
+#define usb_but_8 7
+#define usb_but_9 8
+#define usb_but_10 9
+#define usb_but_ex_1 10
+#define usb_but_ex_2 11
+#define usb_sw_a 12
+#define usb_sw_b 13
+#define usb_sw_c 14
+#define usb_sw_d 15
+#define usb_sw_push 16
+#define usb_sw_inc 17
+#define usb_sw_dec 18
+
 
 volatile all_modes run_mode = solid_white;  // LED effects mode setting
 long ttime = 0;                     // the last time the output pin was toggled
@@ -97,13 +123,73 @@ unsigned char presdb_pd = 0;     // Pressed button
 unsigned char vdcnt_pd = 0;      // Valid data counter
 unsigned char lvdcnt_pd = 0;     // Long valid data counter
 
-int val;
 int encoder0Pos = 0;
 int encoder0PinALast = HIGH;
 int n = HIGH;
 
+int sw_encoder_Pos = 0;
+int sw_encoder_PinALast = HIGH;
+int sw_n = HIGH;
+
+
+volatile boolean f10ms = LOW;
+volatile int counter = 0;
+
 //Initializing a Gamepad
 Gamepad gp;
+
+
+
+
+// Timer1 interrupt
+ISR (TIMER1_COMPA_vect) {
+  f10ms = HIGH;
+}
+
+
+void setupTimer() {
+  cli();
+  initTimer1();
+  sei();
+}
+
+void initTimer1() {
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = 0;
+  OCR1A = 10000;
+  TCCR1B = bit(WGM12) | bit(CS12)| bit(CS10);  // WGM12 => CTC(Clear Timer on Compare Match), CS12 & CS10  => prescaler 1/1024
+  TIMSK1 = bit(OCIE1A);                        // OCIE1A => Timer1 compare match A interrupt
+}
+
+
+void setTimer1(float _time) {
+  long cnt = 16000000 / 1024 * _time;  // cnt = clk / prescaler * time(s)
+  if(cnt > 65535) {
+    cnt = 65535;         // "timer1 16bit counter over."
+  }
+  OCR1A = cnt;           // Output Compare Register Timer1A
+  TIMSK1 = bit(OCIE1A);
+}
+
+void stopTimer1(){
+    TIMSK1 = 0;
+}
+
+/*
+|  CS12  |  CS11  |  CS10  |  Description                       |
+|:-------|:------:|:------:|:----------------------------------:|
+|   0    |    0   |    0   |  No clock source(timer stop)       |
+|   0    |    0   |    1   |  clk / 1                           |
+|   0    |    1   |    0   |  clk / 8                           |
+|   0    |    1   |    1   |  clk / 64                          |
+|   1    |    0   |    0   |  clk / 256                         |
+|   1    |    0   |    1   |  clk / 1024                        |
+|   1    |    1   |    0   |  External clock source no T1 pin.  |
+|   1    |    1   |    1   |  External clock source no T1 pin.  |
+*/
+
+
 
 void read_encoder(void) {
   n = digitalRead(ENC_A);
@@ -127,10 +213,41 @@ void read_encoder(void) {
     
     FastLED.setBrightness(encoder0Pos*10);
     
-    Serial.print (encoder0Pos);
-    Serial.print ("\n");
   }
   encoder0PinALast = n;
+}
+
+void sw_read_encoder(void) {
+  sw_n = digitalRead(SW_ENC_A);
+  if ((sw_encoder_PinALast == HIGH) && (sw_n == LOW)) 
+  {  
+    if (digitalRead(SW_ENC_B) == HIGH) {
+        gp.setButtonState(18, true);
+        delay(50);
+        gp.setButtonState(18, false);
+    } 
+    else 
+    {
+        gp.setButtonState(17, true);
+        delay(50);
+        gp.setButtonState(17, false);
+    }
+  }
+  if ((sw_encoder_PinALast == LOW) && (sw_n == HIGH)) 
+  { 
+    if (digitalRead(SW_ENC_B) == LOW) {
+        gp.setButtonState(18, true);
+        delay(50);
+        gp.setButtonState(18, false);
+    } 
+    else 
+    {
+        gp.setButtonState(17, true);
+        delay(50);
+        gp.setButtonState(17, false);
+    }
+  }  
+  sw_encoder_PinALast = sw_n;
 }
 
 void init_led(void)
@@ -162,7 +279,7 @@ void setup() {
   pinMode(SW_B,  INPUT_PULLUP);     
   pinMode(SW_C,  INPUT_PULLUP);   
   pinMode(SW_D,  INPUT_PULLUP);   
-  //pinMode(SW_PRS,  INPUT_PULLUP);
+  pinMode(SW_PRS,  INPUT_PULLUP);
 
       
   DDRD &= ~(1<<PD5);    //Configure PORTD pin 5 as an input  --- BUTTON 9
@@ -174,9 +291,16 @@ void setup() {
   DDRB &= ~(1<<PB2);    //Configure PORTB pin 2 as an input  --- BUTTON EXT 2
   PORTB |= (1<<PB2);    //Activate pull-ups in PORTB pin 2
 
-  pinMode (ENC_A, INPUT);
-  pinMode (ENC_B, INPUT);
-  Serial.begin(9600);
+  pinMode(ENC_A, INPUT);
+  pinMode(ENC_B, INPUT);
+
+  pinMode(SW_ENC_A, INPUT);
+  pinMode(SW_ENC_B, INPUT);
+
+
+  setupTimer();
+  setTimer1(0.01);
+
 }
 
 // Make whole LED strip in single color
@@ -251,25 +375,6 @@ void runRainbowLoop() {
     hue = 0;
 }
 
-// Moving bars
-void runMovingBars() {
-    CHSV color = CHSV(hue, 255, 255);
-    memset(leds, 0x00, NUM_LEDS * 3);
-    for (int i = (0 - start); i < (NUM_LEDS - start); i++ ) {
-      if (run_mode != moving_bars) return;
-      if (i % 25 == 0) on = !on;
-      if (on) leds[i + start] = color;
-    }
-    FastLED.show();
-    start++;
-    if (start == 250) {
-      start = 0;
-      on = !on;
-    }
-    hue++;
-    if (hue > 255) hue = 0;
-}
-
 void changeMode(void) 
 {
   
@@ -299,27 +404,20 @@ void changeMode(void)
     }
     else if(run_mode == solid_yellow)
     {
-      run_mode = moving_bars;
-    }   
-    else if(run_mode == moving_bars)
-    {
       run_mode = rainbow_loop;
-    } 
+    }   
     else if(run_mode == rainbow_loop)
     {
       run_mode = fire;
-      Serial.print("mode_fire\n");
     }        
     else if(run_mode == fire)
     {
       run_mode = off;
-      Serial.print("modeoff\n");
     }                     
     else
     {
       run_mode = off;
     }
-    Serial.print("bastı\n");
 }
 
 void enc_prs(void)
@@ -334,51 +432,67 @@ void enc_rls(void)
 
 void sw_c_prs(void)
 {
-  gp.setButtonState(1, true);
+  gp.setButtonState(usb_sw_c, true);
 }
 void sw_c_rls(void)
 {
-  gp.setButtonState(1, false);
+  gp.setButtonState(usb_sw_c, false);
 }
 
 
 
 void sw_push_prs(void)
 {
-  //UNS
+  gp.setButtonState(usb_sw_push, true);
 }
 void sw_push_rls(void)
 {
-  //UNS
+  gp.setButtonState(usb_sw_push, false);
 }
 
 
 
 void sw_b_prs(void)
 {
-  gp.setButtonState(2, true);
+  gp.setButtonState(usb_sw_b, true);
 }
 
 void sw_b_rls(void)
 {
-  gp.setButtonState(2, false);
+  gp.setButtonState(usb_sw_b, false);
 }
 
 
 void button_ex_1_prs(void)
 {
-  gp.setButtonState(3, true);
+  gp.setButtonState(usb_but_ex_1, true);
 }
 void button_ex_1_rls(void)
 {
-  gp.setButtonState(3, false);
+  gp.setButtonState(usb_but_ex_1, false);
 }
 
+void sw_a_prs(void)
+{
+  gp.setButtonState(usb_sw_a, true);
+}
+void sw_a_rls(void)
+{
+  gp.setButtonState(usb_sw_a, false);
+}
 
+void sw_d_prs(void)
+{
+  gp.setButtonState(usb_sw_d, true);
+}
+void sw_d_rls(void)
+{
+  gp.setButtonState(usb_sw_d, false);
+}
 /*=====================================================================
         *********** BUTTON READ ************      
 =====================================================================*/
-void butread_pc_pe_pf(void)  // SW_PUSH_CANCEL
+void butread_pc_pd_pe_pf(void)  // SW_PUSH_CANCEL
 {
   /*
    * PB0 : Button_1
@@ -404,19 +518,19 @@ void butread_pc_pe_pf(void)  // SW_PUSH_CANCEL
    * PF1 : ENC_PRS
    * PF7 : Button_EX_1
    */
-  butdat = PINC | 0xBF;    //SW_PUSH KULLANILSA 0x3F
+  butdat = PINC | 0x3F;
   butdat = butdat >> 2;
   butdat = butdat | 0xC0;
   butdat = butdat & (PINE | 0xBF);
   butdat = butdat & (PINF | 0x7D);  
-
+  butdat = butdat & (((PIND | 0xFC) << 2) | 0xF3);
   /*
    * 0  -- NONE
    * 1  -- ENC_PRS
-   * 2  -- NONE
-   * 3  -- NONE
+   * 2  -- SW_D
+   * 3  -- SW_A
    * 4  -- SW_C
-   * 5  -- SW_PUSH -- UNUSED
+   * 5  -- SW_PUSH
    * 6  -- SW_B
    * 7  -- Button_EX_1
    * 
@@ -435,38 +549,50 @@ void butread_pc_pe_pf(void)  // SW_PUSH_CANCEL
         presdb = (butdat ^ prvbut) & prvbut;
         if (presdb != 0)
         {
-          if (presdb == 0x80)       
+          if (presdb & 0x80)       
           {
             button_ex_1_prs();        
           }
-          if (presdb == 0x40)     
+          if (presdb & 0x40)     
           {
             sw_b_prs();
           }
-          if (presdb == 0x20)     
+          if (presdb & 0x20)   // FIZIKSEK OLARAK SW PUSH PRESS BIRLIKTE BASIYOR       
           {
-            //sw_push_prs();    
+            if ((!(presdb & 0x40)) & (!(presdb & 0x10)) & (!(presdb & 0x08))  & (!(presdb & 0x04)) ) 
+            { 
+              sw_push_prs();   
+            } 
           }
-          if (presdb == 0x10)          
+          if (presdb & 0x10)          
           {
             sw_c_prs();
           }
-          if (presdb == 0x08)           
+          if (presdb & 0x08)           
           {
-           //UPS
+           sw_a_prs();
           }
-          if (presdb == 0x04)     
+          if (presdb & 0x04)
           {
-           //UPS
+           sw_d_prs();
           }
-          if (presdb == 0x02)  
+          if (presdb & 0x02)  
           {
             enc_prs();
           }          
-          if (presdb == 0x01)  
+          if (presdb & 0x01)  
           {
             //UPS
           }             
+        }
+        else
+        {
+          sw_push_rls();
+          sw_c_rls();
+          sw_b_rls();
+          sw_a_rls();
+          sw_d_rls();
+          button_ex_1_rls();
         }
       }
     }
@@ -475,68 +601,64 @@ void butread_pc_pe_pf(void)  // SW_PUSH_CANCEL
   {
     vdcnt = 0;
     prvdat = butdat;
-    enc_rls();
-    sw_c_rls();
-    sw_b_rls();
-    button_ex_1_rls();
   }
 }
 
 
 void button_ex_2_prs(void)
 {
-  gp.setButtonState(4, true);
+  gp.setButtonState(usb_but_ex_2, true);
 }
 void button_ex_2_rls(void)
 {
-  gp.setButtonState(4, false);
+  gp.setButtonState(usb_but_ex_2, false);
 }
 
 
 void button_2_prs(void)
 {
-  gp.setButtonState(5, true);
+  gp.setButtonState(usb_but_2, true);
 }
 void button_2_rls(void)
 {
-  gp.setButtonState(5, false);
+  gp.setButtonState(usb_but_2, false);
 }
 
 void button_3_prs(void)
 {
-  gp.setButtonState(6, true);
+  gp.setButtonState(usb_but_3, true);
 }
 void button_3_rls(void)
 {
-  gp.setButtonState(6, false);
+  gp.setButtonState(usb_but_3, false);
 }
 
 void button_6_prs(void)
 {
-  gp.setButtonState(7, true);
+  gp.setButtonState(usb_but_6, true);
 }
 void button_6_rls(void)
 {
-  gp.setButtonState(7, false);
+  gp.setButtonState(usb_but_6, false);
 }
 
 void button_4_prs(void)
 {
-  gp.setButtonState(8, true);
+  gp.setButtonState(usb_but_4, true);
 }
 void button_4_rls(void)
 {
-  gp.setButtonState(8, false);
+  gp.setButtonState(usb_but_4, false);
 }
 
 
 void button_1_prs(void)
 {
-  gp.setButtonState(9, true);
+  gp.setButtonState(usb_but_1, true);
 }
 void button_1_rls(void)
 {
-  gp.setButtonState(9, false);
+  gp.setButtonState(usb_but_1, false);
 }
 
 /*=====================================================================
@@ -595,38 +717,47 @@ void butread_pb(void)
         presdb_pb = (butdat_pb ^ prvbut_pb) & prvbut_pb;
         if (presdb_pb != 0)
         {
-          if (presdb_pb == 0x80)       
+          if (presdb_pb & 0x80)       
           {
             button_2_prs();        
           }
-          if (presdb_pb == 0x40)     
+          if (presdb_pb & 0x40)     
           {
             button_3_prs();
           }
-          if (presdb_pb == 0x20)     
+          if (presdb_pb & 0x20)     
           {
             button_6_prs();    
           }
-          if (presdb_pb == 0x10)          
+          if (presdb_pb & 0x10)          
           {
             button_4_prs();
           }
-          if (presdb_pb == 0x08)           
+          if (presdb_pb & 0x08)           
           {
            //UPS
           }
-          if (presdb_pb == 0x04)     
+          if (presdb_pb & 0x04)     
           {
            button_ex_2_prs();
           }
-          if (presdb_pb == 0x02)  
+          if (presdb_pb & 0x02)  
           {
             //UPS
           }          
-          if (presdb_pb == 0x01)  
+          if (presdb_pb & 0x01)  
           {
             button_1_prs();
           }             
+        }
+        else
+        {
+          button_1_rls();
+          button_2_rls();
+          button_3_rls();
+          button_4_rls();
+          button_6_rls();
+          button_ex_2_rls();
         }
       }
     }
@@ -635,81 +766,57 @@ void butread_pb(void)
   {
     vdcnt_pb = 0;
     prvdat_pb = butdat_pb;
-    button_1_rls();
-    button_2_rls();
-    button_3_rls();
-    button_4_rls();
-    button_6_rls();
-    button_ex_2_rls();
   }
 }
 
 
 void button_5_prs(void)
 {
-  gp.setButtonState(10, true);
+  gp.setButtonState(usb_but_5, true);
 }
 void button_5_rls(void)
 {
-  gp.setButtonState(10, false);
+  gp.setButtonState(usb_but_5, false);
 }
 
 
 
 void button_7_prs(void)
 {
-  gp.setButtonState(11, true);
+  gp.setButtonState(usb_but_7, true);
 }
 void button_7_rls(void)
 {
-  gp.setButtonState(11, false);
+  gp.setButtonState(usb_but_7, false);
 }
 
 void button_8_prs(void)
 {
-  gp.setButtonState(12, true);
+  gp.setButtonState(usb_but_8, true);
 }
 void button_8_rls(void)
 {
-  gp.setButtonState(12, false);
+  gp.setButtonState(usb_but_8, false);
 }
 
 void button_9_prs(void)
 {
-  gp.setButtonState(13, true);
+  gp.setButtonState(usb_but_9, true);
 }
 void button_9_rls(void)
 {
-  gp.setButtonState(13, false);
+  gp.setButtonState(usb_but_9, false);
 }
 
 
 
 void button_10_prs(void)
 {
-  gp.setButtonState(14, true);
+  gp.setButtonState(usb_but_10, true);
 }
 void button_10_rls(void)
 {
-  gp.setButtonState(14, false);
-}
-
-void sw_a_prs(void)
-{
-  gp.setButtonState(15, true);
-}
-void sw_a_rls(void)
-{
-  gp.setButtonState(15, false);
-}
-
-void sw_d_prs(void)
-{
-  gp.setButtonState(0, true);
-}
-void sw_d_rls(void)
-{
-  gp.setButtonState(0, false);
+  gp.setButtonState(usb_but_10, false);
 }
 
 /*=====================================================================
@@ -741,11 +848,11 @@ void butread_pd(void)
    * PF1 : ENC_PRS
    * PF7 : Button_EX_1
    */
-  butdat_pd = PIND | 0x04;
+  butdat_pd = PIND | 0x07;
 
   /*
-   * 0  -- SW_D
-   * 1  -- SW_A
+   * 0  -- NONE
+   * 1  -- NONE
    * 2  -- NONE
    * 3  -- Button_10
    * 4  -- Button_8
@@ -768,38 +875,46 @@ void butread_pd(void)
         presdb_pd = (butdat_pd ^ prvbut_pd) & prvbut_pd;
         if (presdb_pd != 0)
         {
-          if (presdb_pd == 0x80)       
+          if (presdb_pd & 0x80)       
           {
             button_5_prs();        
           }
-          if (presdb_pd == 0x40)     
+          if (presdb_pd & 0x40)     
           {
             button_7_prs();
           }
-          if (presdb_pd == 0x20)     
+          if (presdb_pd & 0x20)     
           {
             button_9_prs();    
           }
-          if (presdb_pd == 0x10)          
+          if (presdb_pd & 0x10)          
           {
             button_8_prs();
           }
-          if (presdb_pd == 0x08)           
+          if (presdb_pd & 0x08)           
           {
            button_10_prs();
           }
-          if (presdb_pd == 0x04)     
+          if (presdb_pd & 0x04)     
           {
            // UPS
           }
-          if (presdb_pd == 0x02)  
+          if (presdb_pd & 0x02)  
           {
-            sw_a_prs();
+            // UPS
           }          
-          if (presdb_pd == 0x01)  
+          if (presdb_pd & 0x01)  
           {
-            sw_d_prs();
+            // UPS
           }             
+        }
+        else
+        {
+          button_5_rls();
+          button_7_rls();
+          button_8_rls();
+          button_9_rls();
+          button_10_rls();
         }
       }
     }
@@ -808,38 +923,34 @@ void butread_pd(void)
   {
     vdcnt_pd = 0;
     prvdat_pd = butdat_pd;
-    button_5_rls();
-    button_7_rls();
-    button_8_rls();
-    button_9_rls();
-    button_10_rls();
-    sw_a_rls();
-    sw_d_rls();
   }
 }
 
 void fadeall() { for(int i = 0; i < NUM_LEDS; i++) { leds[i].nscale8(250); } }
 
 void loop() {
-
-  butread_pc_pe_pf();
-  butread_pb();
-  butread_pd();  
-  read_encoder();
-  delay(10);
-  switch (run_mode) 
+  if(f10ms)
   {
-    case off: runSingleColor(CRGB::Black); break;
-    case solid_white: runSingleColor(CRGB::White); break;
-    case solid_red: runSingleColor(CRGB::Red); break;
-    case solid_blue: runSingleColor(CRGB::Blue); break;
-    case solid_purple: runSingleColor(CRGB::Purple); break;
-    case solid_green: runSingleColor(CRGB::Green); break;
-    case solid_yellow: runSingleColor(CRGB::Yellow); break;
-    case rainbow_loop: runRainbowLoop(); break;
-    case moving_bars: runMovingBars(); break;
-    case fire: runFire(); break;
-    default:
-      off: runSingleColor(CRGB::Black); break;  
-  }  
+    f10ms = LOW; 
+    butread_pc_pd_pe_pf();
+    butread_pb();
+    butread_pd(); 
+    switch (run_mode) 
+    {
+      case off: runSingleColor(CRGB::Black); break;
+      case solid_white: runSingleColor(CRGB::White); break;
+      case solid_red: runSingleColor(CRGB::Red); break;
+      case solid_blue: runSingleColor(CRGB::Blue); break;
+      case solid_purple: runSingleColor(CRGB::Purple); break;
+      case solid_green: runSingleColor(CRGB::Green); break;
+      case solid_yellow: runSingleColor(CRGB::Yellow); break;
+      case rainbow_loop: runRainbowLoop(); break;
+      case fire: runFire(); break;
+      default:
+        off: runSingleColor(CRGB::Black); break;  
+    }    
+  }
+ 
+  read_encoder();
+  sw_read_encoder();  
 }
